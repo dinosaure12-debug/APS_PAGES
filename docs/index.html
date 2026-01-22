@@ -1,1 +1,159 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>APS OCR (local) — PDF → OCR → JSON</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <header class="header">
+    <h1>APS OCR (local)</h1>
+    <p class="sub">
+      Importez un PDF, lancez l’OCR, puis récupérez le texte et le JSON parsé (aucun envoi serveur).
+    </p>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2>1) Import</h2>
+
+      <div class="row">
+        <label class="label">
+          PDF à analyser
+          <input id="pdfInput" type="file" accept="application/pdf" />
+        </label>
+      </div>
+
+      <div class="grid">
+        <label class="label">
+          Pages
+          <select id="pageMode">
+            <option value="first" selected>Page 1 uniquement (recommandé pour commencer)</option>
+            <option value="range">Plage de pages</option>
+            <option value="all">Toutes les pages</option>
+          </select>
+        </label>
+
+        <label class="label">
+          De (si plage)
+          <input id="pageFrom" type="number" min="1" value="1" disabled />
+        </label>
+
+        <label class="label">
+          À (si plage)
+          <input id="pageTo" type="number" min="1" value="1" disabled />
+        </label>
+
+        <label class="label">
+          Qualité OCR (DPI)
+          <select id="dpi">
+            <option value="150">150 (rapide)</option>
+            <option value="200" selected>200 (équilibré)</option>
+            <option value="300">300 (meilleure lecture, plus lent)</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="row">
+        <button id="runBtn" class="btn" disabled>Lancer OCR + Parsing</button>
+        <button id="resetBtn" class="btn secondary" disabled>Réinitialiser</button>
+      </div>
+
+      <div class="row">
+        <div class="status">
+          <div class="statusLine">
+            <span class="badge" id="statusBadge">En attente</span>
+            <span id="statusText">Importez un PDF.</span>
+          </div>
+          <progress id="progress" value="0" max="100"></progress>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>2) Aperçu & Résultats</h2>
+
+      <div class="split">
+        <div>
+          <h3>Aperçu page (rendu)</h3>
+          <div class="previewWrap">
+            <canvas id="previewCanvas"></canvas>
+          </div>
+          <p class="hint">
+            Le PDF est <strong>rasterisé</strong> (c’est-à-dire converti en image) dans un <strong>canvas</strong>
+            (zone de dessin HTML) avant OCR.
+          </p>
+        </div>
+
+        <div>
+          <h3>Exports</h3>
+          <div class="row">
+            <button id="dlOcrBtn" class="btn secondary" disabled>Télécharger OCR (.txt)</button>
+            <button id="dlJsonBtn" class="btn secondary" disabled>Télécharger JSON (.parsed.json)</button>
+            <button id="dlZipBtn" class="btn secondary" disabled>Télécharger ZIP (tout)</button>
+          </div>
+
+          <div class="row">
+            <label class="label">
+              Nom de base (fichiers exportés)
+              <input id="baseName" type="text" placeholder="ex: plan_001" disabled />
+            </label>
+          </div>
+
+          <p class="hint">
+            Le ZIP est généré côté navigateur via <strong>JSZip</strong> (bibliothèque JavaScript), sans serveur.
+          </p>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="ocr">Texte OCR</button>
+        <button class="tab" data-tab="json">JSON parsé</button>
+        <button class="tab" data-tab="log">Logs</button>
+      </div>
+
+      <div class="panel active" id="panel-ocr">
+        <textarea id="ocrOut" spellcheck="false" placeholder="Le texte OCR apparaîtra ici..."></textarea>
+      </div>
+
+      <div class="panel" id="panel-json">
+        <textarea id="jsonOut" spellcheck="false" placeholder="Le JSON parsé apparaîtra ici..."></textarea>
+      </div>
+
+      <div class="panel" id="panel-log">
+        <pre id="logOut"></pre>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Notes de confidentialité</h2>
+      <ul class="list">
+        <li>
+          Le PDF est traité <strong>localement</strong> dans le navigateur (pas d’upload automatique).
+        </li>
+        <li>
+          Les bibliothèques PDF.js et Tesseract.js sont chargées depuis un <strong>CDN</strong>
+          (réseau de distribution de fichiers statiques). Si vous voulez éviter tout tiers, on “vendore”
+          les fichiers dans <code>docs/vendor/</code> (je peux vous fournir la variante).
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <!-- Dépendances (CDN) :
+       - PDF.js : lit et rend le PDF en images
+       - Tesseract.js : OCR dans le navigateur
+       - JSZip : construit un zip côté navigateur
+    -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+
+  <script type="module" src="./parser.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
 
