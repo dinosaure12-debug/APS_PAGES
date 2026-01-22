@@ -1,17 +1,25 @@
 // app.js
-// “Pipeline” = enchaînement d’étapes : PDF → image (canvas) → OCR → parsing JSON → export.
+// Pipeline : PDF → image (canvas) → OCR → parsing JSON → export
 
 import { parseOcrTextToProject } from "./parser.js";
+import * as pdfjsLib from "./vendor/pdfjs/pdf.mjs";
 
-const pdfjsLib = window.pdfjsLib;
-if (!pdfjsLib) {
-  throw new Error("PDF.js n'est pas chargé : window.pdfjsLib est undefined. Vérifie le script PDF.js (legacy).");
-}
+/* -------------------------
+   PDF.js configuration
+-------------------------- */
+
 pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/legacy/build/pdf.worker.min.js";
+  new URL("./vendor/pdfjs/pdf.worker.mjs", import.meta.url).toString();
 
+/* -------------------------
+   DOM helpers
+-------------------------- */
 
 const $ = (id) => document.getElementById(id);
+
+/* -------------------------
+   DOM references
+-------------------------- */
 
 const pdfInput = $("pdfInput");
 const pageMode = $("pageMode");
@@ -42,6 +50,10 @@ const panels = {
   log: $("panel-log"),
 };
 
+/* -------------------------
+   State
+-------------------------- */
+
 let pdfArrayBuffer = null;
 let pdfFileName = null;
 
@@ -49,14 +61,21 @@ let lastOcrText = "";
 let lastParsed = null;
 let lastRenderedPngDataUrl = null;
 
+/* -------------------------
+   Init
+-------------------------- */
+
 setupTabs();
 
 pageMode.addEventListener("change", () => {
-  const mode = pageMode.value;
-  const isRange = mode === "range";
+  const isRange = pageMode.value === "range";
   pageFrom.disabled = !isRange;
   pageTo.disabled = !isRange;
 });
+
+/* -------------------------
+   PDF import
+-------------------------- */
 
 pdfInput.addEventListener("change", async (e) => {
   resetOutputs();
@@ -67,23 +86,25 @@ pdfInput.addEventListener("change", async (e) => {
   baseName.value = pdfFileName;
   baseName.disabled = false;
 
-  setStatus("ok", "PDF chargé", `Fichier: ${file.name}`);
+  setStatus("ok", "PDF chargé", `Fichier : ${file.name}`);
   progress.value = 0;
 
   pdfArrayBuffer = await file.arrayBuffer();
 
-  // On lit le PDF pour connaitre le nombre de pages (PDF.js).
   const pdf = await loadPdf(pdfArrayBuffer);
-  pageTo.value = pdf.numPages;
   pageFrom.value = 1;
+  pageTo.value = pdf.numPages;
 
   runBtn.disabled = false;
   resetBtn.disabled = false;
 
-  // Preview : on rend la page 1
   await renderPageToPreview(pdf, 1, getDpi());
   pdf.destroy?.();
 });
+
+/* -------------------------
+   Reset
+-------------------------- */
 
 resetBtn.addEventListener("click", () => {
   pdfInput.value = "";
@@ -98,6 +119,10 @@ resetBtn.addEventListener("click", () => {
   progress.value = 0;
 });
 
+/* -------------------------
+   Run OCR + parsing
+-------------------------- */
+
 runBtn.addEventListener("click", async () => {
   if (!pdfArrayBuffer) return;
 
@@ -107,38 +132,32 @@ runBtn.addEventListener("click", async () => {
     progress.value = 0;
 
     const pdf = await loadPdf(pdfArrayBuffer);
-
     const pages = computePagesToProcess(pdf.numPages);
-    log(`Pages à traiter: ${pages.join(", ")}`);
+    log(`Pages à traiter : ${pages.join(", ")}`);
 
-    // “Web Worker” = fil d’exécution séparé (évite de bloquer l’interface).
     const worker = await createTesseractWorker();
 
     let fullText = "";
+
     for (let i = 0; i < pages.length; i++) {
       const pno = pages[i];
-      setStatus("work", "OCR", `Rendu + OCR page ${pno}/${pdf.numPages}…`);
+      setStatus("work", "OCR", `Page ${pno}/${pdf.numPages}`);
 
-      // 1) Render PDF page to image (canvas)
       const { pngDataUrl } = await renderPdfPageToImage(pdf, pno, getDpi());
-
-      // conserver un aperçu de la dernière page rendue
       lastRenderedPngDataUrl = pngDataUrl;
-      if (pno === pages[0]) {
-        // preview = première page analysée
+
+      if (i === 0) {
         await drawDataUrlToCanvas(pngDataUrl, previewCanvas);
       }
 
-      // 2) OCR
       const ocrText = await recognizeWithProgress(worker, pngDataUrl, (pct) => {
-        const base = Math.round(((i) / pages.length) * 100);
+        const base = Math.round((i / pages.length) * 100);
         const step = Math.round((pct / 100) * (100 / pages.length));
         progress.value = Math.min(99, base + step);
       });
 
-      fullText += `\n===== PAGE ${pno} =====\n` + ocrText.trim() + "\n";
-
-      log(`Page ${pno} OCR ok (chars: ${ocrText.length}).`);
+      fullText += `\n===== PAGE ${pno} =====\n${ocrText.trim()}\n`;
+      log(`Page ${pno} OCR OK (${ocrText.length} caractères)`);
     }
 
     await worker.terminate();
@@ -147,52 +166,54 @@ runBtn.addEventListener("click", async () => {
     lastOcrText = fullText.trim();
     ocrOut.value = lastOcrText;
 
-    setStatus("work", "Parsing", "Application des règles…");
+    setStatus("work", "Parsing", "Analyse APS…");
     lastParsed = parseOcrTextToProject(lastOcrText);
     jsonOut.value = JSON.stringify(lastParsed, null, 2);
 
-    setStatus("ok", "Terminé", "OCR + parsing effectués.");
+    setStatus("ok", "Terminé", "OCR + parsing effectués");
     progress.value = 100;
 
     dlOcrBtn.disabled = false;
     dlJsonBtn.disabled = false;
     dlZipBtn.disabled = false;
 
-    // par défaut, on se place sur l’onglet JSON (utile en test)
     activateTab("json");
   } catch (err) {
     console.error(err);
-    log(`ERREUR: ${err?.message ?? String(err)}`);
-    setStatus("bad", "Erreur", "Voir logs.");
+    log(`ERREUR : ${err.message ?? err}`);
+    setStatus("bad", "Erreur", "Voir logs");
     progress.value = 0;
   }
 });
 
+/* -------------------------
+   Downloads
+-------------------------- */
+
 dlOcrBtn.addEventListener("click", () => {
-  const name = safeBaseName();
-  downloadText(`${name}.ocr.txt`, lastOcrText || "");
+  downloadText(`${safeBaseName()}.ocr.txt`, lastOcrText);
 });
 
 dlJsonBtn.addEventListener("click", () => {
-  const name = safeBaseName();
-  downloadText(`${name}.parsed.json`, JSON.stringify(lastParsed ?? {}, null, 2));
+  downloadText(
+    `${safeBaseName()}.parsed.json`,
+    JSON.stringify(lastParsed ?? {}, null, 2)
+  );
 });
 
 dlZipBtn.addEventListener("click", async () => {
-  const name = safeBaseName();
   const zip = new JSZip();
+  const name = safeBaseName();
 
-  zip.file(`${name}.ocr.txt`, lastOcrText || "");
-  zip.file(`${name}.parsed.json`, JSON.stringify(lastParsed ?? {}, null, 2));
+  zip.file(`${name}.ocr.txt`, lastOcrText);
+  zip.file(`${name}.parsed.json`, JSON.stringify(lastParsed, null, 2));
 
-  // Ajout d’un rendu image si dispo (utile pour QA)
   if (lastRenderedPngDataUrl) {
-    const blob = dataUrlToBlob(lastRenderedPngDataUrl);
-    zip.file(`${name}.page.png`, blob);
+    zip.file(`${name}.page.png`, dataUrlToBlob(lastRenderedPngDataUrl));
   }
 
-  const content = await zip.generateAsync({ type: "blob" });
-  saveAs(content, `${name}.zip`);
+  const blob = await zip.generateAsync({ type: "blob" });
+  saveAs(blob, `${name}.zip`);
 });
 
 /* -------------------------
@@ -200,20 +221,22 @@ dlZipBtn.addEventListener("click", async () => {
 -------------------------- */
 
 async function loadPdf(arrayBuffer) {
-  // PDF.js a besoin d’un “worker” (script séparé) pour parser le PDF.
-  // On le déclare ici via CDN.
-  // “workerSrc” = chemin du script de worker.
-  
-  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-  return await loadingTask.promise;
+  const task = pdfjsLib.getDocument({
+    data: arrayBuffer,
+    cMapUrl: new URL("./vendor/pdfjs/cmaps/", import.meta.url).toString(),
+    cMapPacked: true,
+    standardFontDataUrl: new URL(
+      "./vendor/pdfjs/standard_fonts/",
+      import.meta.url
+    ).toString(),
+  });
+  return await task.promise;
 }
 
 function getDpi() {
   return parseInt(dpiSel.value, 10) || 200;
 }
 
-// Conversion DPI → scale PDF.js
-// PDF.js travaille en “points” (72 DPI). scale = DPI / 72.
 function dpiToScale(dpi) {
   return dpi / 72;
 }
@@ -225,8 +248,7 @@ async function renderPageToPreview(pdf, pageNumber, dpi) {
 
 async function renderPdfPageToImage(pdf, pageNumber, dpi) {
   const page = await pdf.getPage(pageNumber);
-  const scale = dpiToScale(dpi);
-  const viewport = page.getViewport({ scale });
+  const viewport = page.getViewport({ scale: dpiToScale(dpi) });
 
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d", { alpha: false });
@@ -236,34 +258,33 @@ async function renderPdfPageToImage(pdf, pageNumber, dpi) {
 
   await page.render({ canvasContext: ctx, viewport }).promise;
 
-  const pngDataUrl = canvas.toDataURL("image/png");
-  return { pngDataUrl, width: canvas.width, height: canvas.height };
+  return {
+    pngDataUrl: canvas.toDataURL("image/png"),
+    width: canvas.width,
+    height: canvas.height,
+  };
 }
 
 async function drawDataUrlToCanvas(dataUrl, canvas) {
   const img = new Image();
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
+  await new Promise((res, rej) => {
+    img.onload = res;
+    img.onerror = rej;
     img.src = dataUrl;
   });
 
-  const ctx = canvas.getContext("2d", { alpha: false });
   canvas.width = img.width;
   canvas.height = img.height;
-  ctx.drawImage(img, 0, 0);
+  canvas.getContext("2d").drawImage(img, 0, 0);
 }
 
 /* -------------------------
-   Tesseract.js helpers
+   Tesseract helpers
 -------------------------- */
 
 async function createTesseractWorker() {
-  // “OCR” = reconnaissance de caractères. Tesseract.js fait cela côté navigateur.
-  // lang = "fra" pour français. (On peut ajouter "eng" ensuite si besoin.)
   const worker = await Tesseract.createWorker("fra");
   await worker.setParameters({
-    // améliore parfois les plans : on évite de trop “inventer” des caractères
     tessedit_char_blacklist: "¢©®™",
   });
   return worker;
@@ -272,7 +293,7 @@ async function createTesseractWorker() {
 async function recognizeWithProgress(worker, imageDataUrl, onProgress) {
   const { data } = await worker.recognize(imageDataUrl, {
     logger: (m) => {
-      if (m.status === "recognizing text" && typeof m.progress === "number") {
+      if (m.status === "recognizing text" && m.progress != null) {
         onProgress(Math.round(m.progress * 100));
       }
     },
@@ -285,45 +306,27 @@ async function recognizeWithProgress(worker, imageDataUrl, onProgress) {
 -------------------------- */
 
 function computePagesToProcess(numPages) {
-  const mode = pageMode.value;
-  if (mode === "all") {
+  if (pageMode.value === "all") {
     return Array.from({ length: numPages }, (_, i) => i + 1);
   }
-  if (mode === "range") {
+  if (pageMode.value === "range") {
     let a = parseInt(pageFrom.value, 10) || 1;
     let b = parseInt(pageTo.value, 10) || 1;
     a = Math.max(1, Math.min(numPages, a));
     b = Math.max(1, Math.min(numPages, b));
     if (b < a) [a, b] = [b, a];
-    const out = [];
-    for (let p = a; p <= b; p++) out.push(p);
-    return out;
+    return Array.from({ length: b - a + 1 }, (_, i) => a + i);
   }
-  // first
   return [1];
 }
 
 /* -------------------------
-   UI / logs / downloads
+   UI / utils
 -------------------------- */
 
-function setStatus(kind, badgeText, msg) {
-  statusBadge.textContent = badgeText;
+function setStatus(kind, badge, msg) {
+  statusBadge.textContent = badge;
   statusText.textContent = msg;
-
-  statusBadge.style.borderColor = "var(--border)";
-  statusBadge.style.color = "var(--muted)";
-
-  if (kind === "ok") {
-    statusBadge.style.borderColor = "var(--ok)";
-    statusBadge.style.color = "var(--ok)";
-  } else if (kind === "work") {
-    statusBadge.style.borderColor = "var(--warn)";
-    statusBadge.style.color = "var(--warn)";
-  } else if (kind === "bad") {
-    statusBadge.style.borderColor = "var(--bad)";
-    statusBadge.style.color = "var(--bad)";
-  }
 }
 
 function log(msg) {
@@ -345,22 +348,19 @@ function resetOutputs() {
 }
 
 function safeBaseName() {
-  const v = (baseName.value || "plan").trim();
-  return v.replace(/[^\w\-\.]+/g, "_");
+  return (baseName.value || "plan").trim().replace(/[^\w\-\.]+/g, "_");
 }
 
-function downloadText(filename, content) {
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-  saveAs(blob, filename);
+function downloadText(name, content) {
+  saveAs(new Blob([content], { type: "text/plain;charset=utf-8" }), name);
 }
 
 function dataUrlToBlob(dataUrl) {
   const [meta, b64] = dataUrl.split(",");
-  const mime = /data:(.*?);base64/.exec(meta)?.[1] || "application/octet-stream";
+  const mime = /data:(.*?);base64/.exec(meta)?.[1];
   const bin = atob(b64);
-  const len = bin.length;
-  const arr = new Uint8Array(len);
-  for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
   return new Blob([arr], { type: mime });
 }
 
@@ -369,13 +369,14 @@ function dataUrlToBlob(dataUrl) {
 -------------------------- */
 
 function setupTabs() {
-  for (const t of tabs) {
-    t.addEventListener("click", () => activateTab(t.dataset.tab));
-  }
+  tabs.forEach((t) =>
+    t.addEventListener("click", () => activateTab(t.dataset.tab))
+  );
 }
 
 function activateTab(name) {
-  for (const t of tabs) t.classList.toggle("active", t.dataset.tab === name);
-  for (const [k, el] of Object.entries(panels)) el.classList.toggle("active", k === name);
+  tabs.forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  Object.entries(panels).forEach(([k, el]) =>
+    el.classList.toggle("active", k === name)
+  );
 }
-
