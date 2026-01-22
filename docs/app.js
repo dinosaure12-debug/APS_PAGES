@@ -203,9 +203,7 @@ async function loadPdf(arrayBuffer) {
   // PDF.js a besoin d’un “worker” (script séparé) pour parser le PDF.
   // On le déclare ici via CDN.
   // “workerSrc” = chemin du script de worker.
-  const workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.js";
-  pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
-
+  
   const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
   return await loadingTask.promise;
 }
