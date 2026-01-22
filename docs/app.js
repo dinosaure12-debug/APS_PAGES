@@ -2,15 +2,14 @@
 // “Pipeline” = enchaînement d’étapes : PDF → image (canvas) → OCR → parsing JSON → export.
 
 import { parseOcrTextToProject } from "./parser.js";
+
 const pdfjsLib = window.pdfjsLib;
-
 if (!pdfjsLib) {
-  throw new Error("PDF.js n'est pas chargé : window.pdfjsLib est undefined. Vérifie le script CDN pdf.min.js.");
+  throw new Error("PDF.js n'est pas chargé : window.pdfjsLib est undefined. Vérifie le script PDF.js (legacy).");
 }
-
-// Worker PDF.js (version identique à celle du pdf.min.js)
 pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.js";
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/legacy/build/pdf.worker.min.js";
+
 
 const $ = (id) => document.getElementById(id);
 
